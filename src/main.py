@@ -102,7 +102,8 @@ ROOT_HTML = r"""
         body.appendChild(content);
         body.appendChild(meta);
         article.appendChild(body);
-        messagesEl.appendChild(article);
+        // Prepend newest messages at the top
+        messagesEl.insertBefore(article, messagesEl.firstChild);
       }
 
       function setStatus(state) {
