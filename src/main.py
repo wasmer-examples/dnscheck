@@ -26,7 +26,7 @@ ROOT_HTML = r"""
         <h1 class="title">WebSocket Echo</h1>
 
         <p class="is-size-4">This is an example Python fastapi Websocket server running on <a href="https://wasmer.io/products/edge">Wasmer Edge</a>.</p>
-        <p class="is-size-4">The WebSocket echo server is running on Wasmer Edge. It will echo back any message you send to it.</p>
+        <p class="is-size-4">The WebSocket echo server will echo back any message you send to it.</p>
 
         <div class="box">
           <div class="is-flex is-align-items-center is-justify-content-space-between">
