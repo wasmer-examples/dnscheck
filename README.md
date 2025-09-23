@@ -1,115 +1,61 @@
-# Pandoc Converter (pypandoc) + Wasmer
+# FastAPI WebSocket Echo + Wasmer
 
-This demo shows how to use **pypandoc** (a Python wrapper around Pandoc) to convert text between markup formats. The program provides a small web UI, but the focus here is on how `pypandoc.convert_text(...)` is used.
+This example demonstrates a minimal FastAPI WebSocket echo server with a small Bulma‑styled UI. Open the page, it connects to a WebSocket, and anything you send is echoed back. The UI shows connection status, a message list with timestamps, and round‑trip time (RTT) for echoes.
 
-## Demo
+## Features
 
-https://pandoc-converter-example.wasmer.app/
+- WebSocket endpoint at `/api/ws` that echoes back text messages.
+- Bulma‑styled UI with:
+  - Status tag (Connecting / Connected / Disconnected)
+  - Input and Send button (default text: "Hello Wasmer!")
+  - Message list that shows timestamps and RTT
+  - Reconnect button when disconnected
 
-## How it Works (sections from `app.py`)
+All logic lives in a single file: `src/main.py`.
 
-All logic lives in one file. Here are the **relevant code sections** related to pypandoc:
+## Run Locally
 
-### Supported formats
-
-A list of markup formats is declared. These are passed directly to `pypandoc`:
-
-```python
-SUPPORTED_FORMATS = [
-    ("markdown", "Markdown"),
-    ("rst", "reStructuredText"),
-    ("html", "HTML"),
-    ("latex", "LaTeX"),
-    ("mediawiki", "MediaWiki"),
-    ("docbook", "DocBook"),
-    ("org", "Org Mode"),
-]
-```
-
-### Conversion call
-
-The actual conversion happens in the POST request handler. The work is run in a background thread to avoid blocking the server:
-
-```python
-converted = await asyncio.to_thread(
-    pypandoc.convert_text,
-    text,
-    to=target_format,
-    format=source_format,
-)
-```
-
-Key details:
-
-* `format` specifies the **source format**.
-* `to` specifies the **target format**.
-* The return value is the converted text, ready to display or save.
-
-### Error handling
-
-If Pandoc raises an error, it is caught and safely escaped for display:
-
-```python
-except (RuntimeError, OSError) as exc:
-    escaped_error = html.escape(str(exc))
-    return ERROR_TEMPLATE.replace("{escaped_error}", escaped_error)
-```
-
-This ensures that unsupported conversions or missing executables don’t crash the app.
-
----
-
-## Running Locally
-
-1. Create a `requirements.txt`:
-
-```
-fastapi
-uvicorn
-pypandoc
-```
-
-2. Install dependencies:
+1. Install dependencies (uv recommended but pip works too):
 
 ```bash
-pip install -r requirements.txt
+pip install fastapi uvicorn
 ```
 
-3. Run the server:
+2. Start the server:
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8000
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-4. Convert via API (example without UI):
+3. Open the app:
 
-```bash
-curl -X POST http://localhost:8000/api/hx/convert \
-  -F 'source_format=markdown' \
-  -F 'target_format=rst' \
-  -F 'text=# Hello **world**'
+```
+http://localhost:8000
 ```
 
-The response will contain the converted text wrapped in HTML.
+Type a message (pre-filled with "Hello Wasmer!") and press Enter or click Send. You’ll see both the sent message and the echoed response with a timestamp; the RTT appears when the echoed message is received.
 
-API endpoints:
+## Code Overview
 
-- GET `/api/pandoc-convert?from=markdown&to=html&text=...` returns converted content as plain text.
-- POST `/api/pandoc-convert?from=markdown&to=html` with form field `text` returns converted content as plain text.
+- `GET /` serves an HTML page with Bulma CSS and a small client script that:
+  - connects to `ws://<host>/api/ws` (or `wss://` on HTTPS)
+  - updates the status tag based on connection state
+  - sends messages and renders received ones
+  - attaches a transient id to messages to compute RTT on echo
+- `WEBSOCKET /api/ws` accepts text frames and sends them back unchanged.
 
-On failure, endpoints return JSON `{ "error": "<msg>" }` with status 400.
+Relevant file:
 
-
----
+- `src/main.py`
 
 ## Deploying to Wasmer Edge (Overview)
 
-1. Include `app.py` and `requirements.txt`.
-2. Deploy to Wasmer Edge and point the web process to run Uvicorn (e.g., `uvicorn app:app --host 0.0.0.0 --port $PORT`).
-3. Open `https://<your-subdomain>.wasmer.app/` and try converting text between formats.
+1. Ensure your entrypoint runs Uvicorn, for example:
 
----
+```
+uvicorn src.main:app --host 0.0.0.0 --port $PORT
+```
 
-⚡ With this setup, the key takeaway is how to call **`pypandoc.convert_text`** with `format` and `to` arguments to transform text between markup languages.
+2. Deploy to Wasmer Edge with your preferred workflow and open your subdomain `https://<your-subdomain>.wasmer.app/`.
 
-Would you like me to also add a **minimal example without FastAPI** (just showing `pypandoc.convert_text` in a script) so the README highlights the conversion part even more directly?
+That’s it—open the page, send a message, and see it echoed back in real time.

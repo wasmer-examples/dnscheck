@@ -1,227 +1,196 @@
-import asyncio
-import html
-from typing import List
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import HTMLResponse
 
-import pypandoc
-from fastapi import FastAPI, Form, Query
-from fastapi.responses import HTMLResponse, PlainTextResponse, JSONResponse
-from fastapi import Body
+app = FastAPI(title="FastAPI WebSocket Echo")
 
-app = FastAPI(title="pandoc-converter")
-
-SUPPORTED_FORMATS: List[tuple[str, str]] = [
-    ("markdown", "Markdown"),
-    ("rst", "reStructuredText"),
-    ("html", "HTML"),
-    ("latex", "LaTeX"),
-    ("mediawiki", "MediaWiki"),
-    ("docbook", "DocBook"),
-    ("org", "Org Mode"),
-]
-
-ROOT_TEMPLATE = r"""
+ROOT_HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Pandoc Converter</title>
+    <title>WebSocket Echo</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.2/css/bulma.min.css" />
-    <script
-      src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.7/dist/htmx.min.js"
-      integrity="sha384-ZBXiYtYQ6hJ2Y0ZNoYuI+Nq5MqWBr+chMrS/RkXpNzQCApHEhOt2aY8EJgqwHLkJ"
-      crossorigin="anonymous">
-    </script>
+    <style>
+      /* Let messages expand the page; keep them compact */
+      .messages .message { margin: .25rem 0; }
+      .messages .message-body { padding: .4rem .5rem; font-size: 0.9rem; }
+      .meta { color: #6b7280; font-size: 0.8rem; margin-left: .5rem; }
+      .is-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      /* Status size handled by Bulma classes now */
+    </style>
   </head>
-  <body class="has-background-light">
+  <body>
     <section class="section">
       <div class="container">
-        <h1 class="title">Pandoc Converter</h1>
-        <p class="subtitle">Convert text between markup formats without leaving your browser.</p>
-        <p>
-          Hint: You can also use the <a href="/docs">REST API</a>.
-        </p>
-        <br />
-        <form
-          class="box"
-          hx-post="/api/hx/convert"
-          hx-target="#conversion-result"
-          hx-swap="innerHTML"
-          hx-disabled-elt=".button-submit"
-          hx-on::beforeRequest="document.getElementById('convert-button').classList.add('is-loading')"
-          hx-on::afterRequest="document.getElementById('convert-button').classList.remove('is-loading')">
-          <div class="columns">
-            <div class="column">
-              <div class="field">
-                <label class="label" for="source_format">Source Format</label>
-                <div class="control">
-                  <div class="select is-fullwidth">
-                    <select id="source_format" name="source_format" required>
-                      {format_options}
-                    </select>
-                  </div>
-                </div>
-              </div>
+        <h1 class="title">WebSocket Echo</h1>
+
+        <p class="is-size-4">This is an example Python fastapi Websocket server running on <a href="https://wasmer.io/products/edge">Wasmer Edge</a>.</p>
+        <p class="is-size-4">The WebSocket echo server is running on Wasmer Edge. It will echo back any message you send to it.</p>
+
+        <div class="box">
+          <div class="is-flex is-align-items-center is-justify-content-space-between">
+            <div>
+              <span class="mr-2">Status:</span>
+              <span id="status" class="tag is-warning is-medium">Connecting…</span>
             </div>
-            <div class="column">
-              <div class="field">
-                <label class="label" for="target_format">Target Format</label>
-                <div class="control">
-                  <div class="select is-fullwidth">
-                    <select id="target_format" name="target_format" required>
-                      {format_options}
-                    </select>
-                  </div>
-                </div>
-              </div>
+            <div>
+              <button id="reconnect" class="button is-small is-light" disabled>Reconnect</button>
             </div>
           </div>
-          <div class="field">
-            <label class="label" for="text">Source Text</label>
-            <div class="control">
-              <textarea class="textarea" id="text" name="text" rows="12" placeholder="Enter your content here..." required></textarea>
-            </div>
+        </div>
+
+        <div class="field has-addons">
+          <div class="control is-expanded">
+            <input id="input" class="input" type="text" placeholder="Type a message and press Enter" value="Hello Wasmer!" />
           </div>
-          <div class="field is-grouped is-grouped-right">
-            <p class="control">
-              <button id="convert-button" type="submit" class="button is-primary button-submit">Convert</button>
-            </p>
+          <div class="control">
+            <button id="send" class="button is-primary">Send</button>
           </div>
-        </form>
-        <div id="conversion-result"></div>
+        </div>
+
+        <div class="box messages" id="messages">
+          <p id="placeholder" class="has-text-grey">Send messages</p>
+        </div>
       </div>
     </section>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const inputEl = document.getElementById('input');
+      const sendBtn = document.getElementById('send');
+      const reconnectBtn = document.getElementById('reconnect');
+      const messagesEl = document.getElementById('messages');
+      const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+      const wsUrl = `${wsProtocol}://${location.host}/api/ws`;
+      let ws = null;
+
+      function formatTime(d) {
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+
+      // type: 'sent' | 'received'
+      function clearPlaceholder() {
+        const ph = document.getElementById('placeholder');
+        if (ph) ph.remove();
+      }
+
+      function addMessage(text, type, extraMeta = '') {
+        clearPlaceholder();
+        const article = document.createElement('article');
+        article.className = `message ${type === 'sent' ? 'is-primary' : 'is-info'}`;
+        const body = document.createElement('div');
+        body.className = 'message-body';
+
+        const now = new Date();
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = `(${formatTime(now)}${extraMeta ? ` • ${extraMeta}` : ''})`;
+
+        const content = document.createElement('span');
+        content.className = 'is-mono';
+        content.textContent = text;
+
+        body.appendChild(content);
+        body.appendChild(meta);
+        article.appendChild(body);
+        messagesEl.appendChild(article);
+      }
+
+      function setStatus(state) {
+        statusEl.classList.remove('is-warning', 'is-success', 'is-danger');
+        if (state === 'connected') {
+          statusEl.textContent = 'Connected';
+          statusEl.classList.add('is-success');
+          reconnectBtn.disabled = true;
+        } else if (state === 'connecting') {
+          statusEl.textContent = 'Connecting…';
+          statusEl.classList.add('is-warning');
+          reconnectBtn.disabled = true;
+        } else {
+          statusEl.textContent = 'Disconnected';
+          statusEl.classList.add('is-danger');
+          reconnectBtn.disabled = false;
+        }
+      }
+
+      const inflight = new Map(); // id -> send timestamp
+      let nextId = 1;
+
+      function connect() {
+        setStatus('connecting');
+        ws = new WebSocket(wsUrl);
+        ws.addEventListener('open', () => setStatus('connected'));
+        ws.addEventListener('close', () => setStatus('disconnected'));
+        ws.addEventListener('message', (event) => {
+          let data = event.data;
+          // Expect echo format: "<id>|<payload>" to measure RTT if applicable
+          const sep = data.indexOf('|');
+          if (sep > 0) {
+            const idStr = data.slice(0, sep);
+            const payload = data.slice(sep + 1);
+            const t0 = inflight.get(idStr);
+            let meta = '';
+            if (t0) {
+              const rttMs = Math.round(performance.now() - t0);
+              inflight.delete(idStr);
+              meta = `RTT ${rttMs} ms`;
+            }
+            addMessage(`Received: ${payload}`, 'received', meta);
+          } else {
+            addMessage(`Received: ${data}`, 'received');
+          }
+        });
+      }
+
+      connect();
+
+      function sendCurrent() {
+        const msg = inputEl.value;
+        if (!msg) return;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const id = String(nextId++);
+          inflight.set(id, performance.now());
+          ws.send(`${id}|${msg}`);
+          addMessage(`Sent: ${msg}`, 'sent');
+        } else {
+          addMessage('Cannot send: WebSocket not connected', 'received');
+        }
+        inputEl.value = '';
+        inputEl.focus();
+      }
+
+      sendBtn.addEventListener('click', sendCurrent);
+      inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          sendCurrent();
+        }
+      });
+      reconnectBtn.addEventListener('click', () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) connect();
+      });
+    </script>
   </body>
-</html>
+  </html>
 """
-
-ERROR_TEMPLATE = r"""
-<article class="message is-danger">
-  <div class="message-header">
-    <p>Conversion Failed</p>
-  </div>
-  <div class="message-body">{escaped_error}</div>
-</article>
-"""
-
-
-SUCCESS_TEMPLATE = r"""
-<article class="message is-success">
-  <div class="message-header">
-    <p>Conversion Result</p>
-  </div>
-  <div class="message-body">
-    <textarea class="textarea" rows="12" readonly>{escaped_result}</textarea>
-  </div>
-</article>
-"""
-
-
-def _format_options() -> str:
-    options = []
-    for value, label in SUPPORTED_FORMATS:
-        options.append(f'<option value="{value}">{html.escape(label)}</option>')
-    return "\n".join(options)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def root() -> str:
-    format_options = _format_options()
-    return ROOT_TEMPLATE.replace("{format_options}", format_options)
+    return ROOT_HTML
 
 
-@app.post("/api/hx/convert", response_class=HTMLResponse, include_in_schema=False)
-async def convert(
-    text: str = Form(...),
-    source_format: str = Form(...),
-    target_format: str = Form(...),
-) -> str:
-    # import time; time.sleep(5)
+@app.websocket("/api/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
     try:
-        converted = await asyncio.to_thread(
-            pypandoc.convert_text,
-            text,
-            to=target_format,
-            format=source_format,
-        )
-    except (RuntimeError, OSError) as exc:
-        escaped_error = html.escape(str(exc))
-        return ERROR_TEMPLATE.replace("{escaped_error}", escaped_error)
-
-    escaped_result = html.escape(converted)
-    return SUCCESS_TEMPLATE.replace("{escaped_result}", escaped_result)
-
-
-@app.get(
-    "/api/pandoc-convert",
-    summary="Convert text using Pandoc (GET)",
-    description=(
-        "Converts the provided text from one markup format to another using Pandoc. "
-        "All parameters are provided via query string."
-    ),
-)
-async def api_pandoc_convert_get(
-    from_: str = Query(
-        ..., alias="from", description="Source format (e.g., 'markdown', 'rst', 'html')."
-    ),
-    to: str = Query(..., description="Target format to convert to."),
-    text: str = Query(..., description="Input text to convert."),
-):
-    """
-    Example
-    -------
-    curl --get 'http://localhost:8000/api/pandoc-convert' \\
-      --data-urlencode 'from=markdown' \\
-      --data-urlencode 'to=html' \\
-      --data-urlencode 'text=# Hello\n\nThis is **Markdown**.'
-    """
-    try:
-        converted = await asyncio.to_thread(
-            pypandoc.convert_text,
-            text,
-            to=to,
-            format=from_,
-        )
-    except (RuntimeError, OSError, ValueError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
-
-    return PlainTextResponse(converted)
-
-
-@app.post(
-    "/api/pandoc-convert",
-    summary="Convert text using Pandoc (POST)",
-    description=(
-        "Converts text using Pandoc. Query parameters define formats; the request body "
-        "must include form field 'text' (multipart/form-data or application/x-www-form-urlencoded)."
-    ),
-)
-async def api_pandoc_convert_post(
-    from_: str = Query(
-        ..., alias="from", description="Source format (e.g., 'markdown', 'rst', 'html')."
-    ),
-    to: str = Query(..., description="Target format to convert to."),
-    text: str = Form(..., description="Input text to convert."),
-):
-    """
-    Example
-    -------
-    curl -X POST 'http://localhost:8000/api/pandoc-convert?from=markdown&to=html' \\
-      -F 'text=# Hello\n\nThis is **Markdown**.'
-    """
-    # POST expects query params 'from' and 'to' and form field 'text'
-
-    try:
-        converted = await asyncio.to_thread(
-            pypandoc.convert_text,
-            text,
-            to=to,
-            format=from_,
-        )
-    except (RuntimeError, OSError, ValueError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
-
-    return PlainTextResponse(converted)
+        while True:
+            data = await websocket.receive_text()
+            # Echo back exactly what was sent so client can measure RTT
+            await websocket.send_text(data)
+    except Exception:
+        # Connection closed or errored; exit gracefully
+        pass
 
 
 if __name__ == "__main__":
