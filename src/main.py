@@ -27,6 +27,14 @@ ROOT_HTML = r"""
 
         <p class="is-size-4">This is an example Python fastapi Websocket server running on <a href="https://wasmer.io/products/edge">Wasmer Edge</a>.</p>
         <p class="is-size-4">The WebSocket echo server will echo back any message you send to it.</p>
+        <p class="mt-2 mb-2">
+          <a class="button is-light is-medium" href="https://github.com/wasmer-examples/python-fastapi-websockets" target="_blank" rel="noopener noreferrer">
+            <span class="icon is-medium" aria-hidden="true">
+              <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg" alt="GitHub" style="width: 24px; height: 24px;">
+            </span>
+            <span>Check out the code on GitHub</span>
+          </a>
+        </p>
 
         <div class="box">
           <div class="is-flex is-align-items-center is-justify-content-space-between">

@@ -28,12 +28,7 @@ All logic lives in a single file: `src/main.py`.
 
 ## Deploying to Wasmer Edge (Overview)
 
-1. Ensure your entrypoint runs Uvicorn, for example:
-
-```
-uvicorn src.main:app --host 0.0.0.0 --port $PORT
-```
-
-2. Deploy to Wasmer Edge with your preferred workflow and open your subdomain `https://<your-subdomain>.wasmer.app/`.
-
-That’s it—open the page, send a message, and see it echoed back in real time.
+* [Install the Wasmer CLI](https://docs.wasmer.io/install)
+* Sign up for a Wasmer account at [https://wasmer.io](https://wasmer.io)
+* Run `wasmer login` to authenticate
+* Run `make deploy-wasmer`
