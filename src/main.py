@@ -154,9 +154,15 @@ ROOT_HTML = r"""
 
       connect();
 
+      const MAX_LEN = 500;
+
       function sendCurrent() {
         const msg = inputEl.value;
         if (!msg) return;
+        if (msg.length > MAX_LEN) {
+          addMessage(`Cannot send: message exceeds ${MAX_LEN} chars`, 'received');
+          return;
+        }
         if (ws && ws.readyState === WebSocket.OPEN) {
           const id = String(nextId++);
           inflight.set(id, performance.now());
@@ -191,10 +197,14 @@ async def root() -> str:
 
 @app.websocket("/api/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    MAX_LEN = 500
     await websocket.accept()
     try:
         while True:
             data = await websocket.receive_text()
+            # Enforce max length of 500 characters on server as well
+            if len(data) > MAX_LEN:
+                data = data[:MAX_LEN]
             # Echo back exactly what was sent so client can measure RTT
             await websocket.send_text(data)
     except Exception:
