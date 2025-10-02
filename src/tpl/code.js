@@ -1,10 +1,178 @@
+class DnsCheckService {
+  constructor({ url, onOpen, onMessage, onError, onClose, onMalformedMessage }) {
+    this.url = url;
+    this.callbacks = {
+      onOpen,
+      onMessage,
+      onError,
+      onClose,
+      onMalformedMessage,
+    };
+    this.ws = null;
+    this.readyPromise = null;
+    this._openResolvers = null;
+    this.explicitClose = false;
+    this.connected = false;
+    this.runToken = 0;
+
+    this._handleOpen = this._handleOpen.bind(this);
+    this._handleMessage = this._handleMessage.bind(this);
+    this._handleError = this._handleError.bind(this);
+    this._handleClose = this._handleClose.bind(this);
+  }
+
+  async ensureOpen() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING && this.readyPromise) {
+      return this.readyPromise;
+    }
+
+    if (this.ws && (this.ws.readyState === WebSocket.CLOSING || this.ws.readyState === WebSocket.CLOSED)) {
+      this._removeListeners(this.ws);
+      this.ws = null;
+      this.readyPromise = null;
+      this._openResolvers = null;
+    }
+
+    if (!this.ws) {
+      this.explicitClose = false;
+      this.connected = false;
+      this.ws = new WebSocket(this.url);
+      this.ws.addEventListener('open', this._handleOpen);
+      this.ws.addEventListener('message', this._handleMessage);
+      this.ws.addEventListener('error', this._handleError);
+      this.ws.addEventListener('close', this._handleClose);
+      this.readyPromise = new Promise((resolve, reject) => {
+        this._openResolvers = { resolve, reject };
+      });
+    }
+
+    return this.readyPromise;
+  }
+
+  async startCheck(payload) {
+    const token = this.runToken + 1;
+    this.runToken = token;
+    await this.ensureOpen();
+    if (token !== this.runToken) {
+      return false;
+    }
+    this.send({ action: 'check', ...payload });
+    return true;
+  }
+
+  send(message) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('Connection is not open.');
+    }
+    this.ws.send(JSON.stringify(message));
+  }
+
+  close(code = 1000, reason = 'client closing') {
+    if (!this.ws) return;
+    this.explicitClose = true;
+    this.runToken += 1;
+    const socket = this.ws;
+    this._removeListeners(socket);
+    this.ws = null;
+    this.readyPromise = null;
+    this._openResolvers = null;
+    this.connected = false;
+    try {
+      socket.close(code, reason);
+    } catch (err) {
+      // ignore
+    }
+  }
+
+  _resolveReady() {
+    if (!this._openResolvers) return;
+    this._openResolvers.resolve();
+    this._openResolvers = null;
+    this.readyPromise = null;
+  }
+
+  _rejectReady(error) {
+    if (!this._openResolvers) return;
+    this._openResolvers.reject(error);
+    this._openResolvers = null;
+    this.readyPromise = null;
+  }
+
+  _handleOpen() {
+    this.connected = true;
+    this._resolveReady();
+    if (this.callbacks.onOpen) {
+      this.callbacks.onOpen();
+    }
+  }
+
+  _handleMessage(event) {
+    let payload;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (err) {
+      if (this.callbacks.onMalformedMessage) {
+        this.callbacks.onMalformedMessage(err);
+      }
+      return;
+    }
+    if (this.callbacks.onMessage) {
+      this.callbacks.onMessage(payload);
+    }
+  }
+
+  _handleError() {
+    const wasConnected = this.connected;
+    if (!wasConnected) {
+      this._rejectReady(new Error('connection error'));
+    }
+    if (this.callbacks.onError) {
+      this.callbacks.onError({ wasConnected, error: new Error('connection error') });
+    }
+  }
+
+  _handleClose(event) {
+    const target = event.target || this.ws;
+    this._removeListeners(target);
+    if (this.ws === target) {
+      this.ws = null;
+    }
+
+    const wasExplicit = this.explicitClose;
+    const wasConnected = this.connected;
+    this.explicitClose = false;
+    this.connected = false;
+
+    if (!wasConnected) {
+      this._rejectReady(new Error('connection closed'));
+    }
+
+    if (!wasExplicit) {
+      if (wasConnected && this.callbacks.onClose) {
+        this.callbacks.onClose({ wasConnected: true, event });
+      } else if (!wasConnected && this.callbacks.onError) {
+        this.callbacks.onError({ wasConnected: false, error: new Error('connection closed') });
+      }
+    }
+  }
+
+  _removeListeners(target) {
+    if (!target) return;
+    target.removeEventListener('open', this._handleOpen);
+    target.removeEventListener('message', this._handleMessage);
+    target.removeEventListener('error', this._handleError);
+    target.removeEventListener('close', this._handleClose);
+  }
+}
+
 function init() {
   const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const wsUrl = `${wsProtocol}://${location.host}/api/ws`;
 
-  const connectionStatus = document.getElementById('connectionStatus');
-  const statusTag = document.getElementById('statusTag');
-  const reconnectBtn = document.getElementById('reconnect');
   const domainInput = document.getElementById('domainInput');
   const providerSelect = document.getElementById('providerList');
   const providerDescription = document.getElementById('providerDescription');
@@ -18,15 +186,34 @@ function init() {
   const consensusA = document.getElementById('consensusA');
   const consensusAAAA = document.getElementById('consensusAAAA');
 
-  let ws = null;
-  let wsReadyPromise = null;
-  let wsHandlers = null;
+  const urlParams = new URLSearchParams(window.location.search);
+  const initialSelections = {
+    domain: (urlParams.get('domain') || '').trim(),
+    listId: urlParams.get('list_id') || '',
+    transport: urlParams.get('transport') || '',
+  };
+
+  if (initialSelections.domain) {
+    domainInput.value = initialSelections.domain;
+  }
+
+  if (initialSelections.transport) {
+    const hasTransportOption = Array.from(transportSelect.options).some(
+      (option) => option.value === initialSelections.transport,
+    );
+    if (hasTransportOption) {
+      transportSelect.value = initialSelections.transport;
+    }
+  }
+
   let providerLists = {};
   let latestConsensus = { A: [], AAAA: [] };
   const providerIndex = new Map();
   let hasRequested = false;
   let runInProgress = false;
   let awaitingRun = false;
+  let initialAutoSubmitPending = Boolean(initialSelections.domain);
+  let currentRunService = null;
 
   function arraysEqual(a = [], b = []) {
     if (a.length !== b.length) return false;
@@ -44,39 +231,42 @@ function init() {
     return { hasHardError, hasSoftError, hasRecords };
   }
 
-  function showConnectionStatus(stateClass, label, { allowReconnect = false } = {}) {
-    if (!hasRequested) return;
-    connectionStatus.classList.remove('is-hidden');
-    statusTag.className = 'tag status-tag';
-    if (stateClass) {
-      statusTag.classList.add(stateClass);
-    }
-    statusTag.textContent = label;
-    reconnectBtn.disabled = !allowReconnect;
-  }
-
-  function hideConnectionStatus() {
-    connectionStatus.classList.add('is-hidden');
-    statusTag.className = 'tag status-tag';
-    statusTag.textContent = '—';
-    reconnectBtn.disabled = true;
-  }
-
-  function formatRecords(records) {
-    if (!records || records.length === 0) {
-      return '<span class="is-dimmed">—</span>';
-    }
-    return records.map((value) => `<span>${value}</span>`).join('<br />');
-  }
-
-  function showAlert(message, tone = 'is-danger') {
+  function showAlert(message, tone = 'is-danger', options = {}) {
+    const { retry = false, onRetry = null } = options;
     const notification = document.createElement('div');
     notification.className = `notification ${tone}`;
-    notification.innerHTML = `
-      <button class="delete" aria-label="Dismiss"></button>
-      ${message}
-    `;
-    notification.querySelector('button').addEventListener('click', () => notification.remove());
+
+    const dismissButton = document.createElement('button');
+    dismissButton.className = 'delete';
+    dismissButton.type = 'button';
+    dismissButton.setAttribute('aria-label', 'Dismiss');
+    dismissButton.addEventListener('click', () => notification.remove());
+
+    const messageContainer = document.createElement('div');
+    messageContainer.innerHTML = message;
+
+    notification.appendChild(dismissButton);
+    notification.appendChild(messageContainer);
+
+    if (retry) {
+      const actions = document.createElement('div');
+      actions.className = 'buttons is-right mt-3';
+      const retryButton = document.createElement('button');
+      retryButton.type = 'button';
+      retryButton.className = 'button is-primary is-light is-small';
+      retryButton.textContent = 'Retry';
+      retryButton.addEventListener('click', () => {
+        notification.remove();
+        if (typeof onRetry === 'function') {
+          onRetry();
+        } else {
+          form.requestSubmit();
+        }
+      });
+      actions.appendChild(retryButton);
+      notification.appendChild(actions);
+    }
+
     alertArea.replaceChildren(notification);
   }
 
@@ -108,9 +298,17 @@ function init() {
 
   function updateConsensusDisplay(consensus) {
     latestConsensus = { A: consensus.A || [], AAAA: consensus.AAAA || [] };
-    summaryBox.classList.toggle('is-hidden', !latestConsensus.A.length && !latestConsensus.AAAA.length);
+    const hasConsensus = latestConsensus.A.length || latestConsensus.AAAA.length;
+    summaryBox.classList.toggle('is-hidden', !hasConsensus);
     consensusA.innerHTML = formatRecords(latestConsensus.A);
     consensusAAAA.innerHTML = formatRecords(latestConsensus.AAAA);
+  }
+
+  function formatRecords(records) {
+    if (!records || records.length === 0) {
+      return '<span class="is-dimmed">—</span>';
+    }
+    return records.map((value) => `<span>${value}</span>`).join('<br />');
   }
 
   function renderProviderResult(result, consensus) {
@@ -194,7 +392,17 @@ function init() {
       option.textContent = list.label;
       providerSelect.appendChild(option);
     });
+    let targetListId = providerSelect.options.length ? providerSelect.options[0].value : '';
+    if (initialSelections.listId && providerLists[initialSelections.listId]) {
+      targetListId = initialSelections.listId;
+    }
+    providerSelect.value = targetListId;
     updateProviderDescription();
+
+    if (initialAutoSubmitPending) {
+      initialAutoSubmitPending = false;
+      queueMicrotask(() => form.requestSubmit());
+    }
   }
 
   function updateProviderDescription() {
@@ -203,26 +411,31 @@ function init() {
     providerDescription.textContent = list ? list.description : '';
   }
 
-  function handleServerMessage(message) {
-    switch (message.type) {
-      case 'provider_lists':
-        providerLists = message.lists || {};
-        providerIndex.clear();
-        Object.values(providerLists).forEach((list) => {
-          (list.providers || []).forEach((provider) => {
-            providerIndex.set(provider.id, provider);
-          });
+  function handleServerMessage(message, sourceService) {
+    if (message.type === 'provider_lists') {
+      providerLists = message.lists || {};
+      providerIndex.clear();
+      Object.values(providerLists).forEach((list) => {
+        (list.providers || []).forEach((provider) => {
+          providerIndex.set(provider.id, provider);
         });
-        populateProviderLists();
-        break;
+      });
+      populateProviderLists();
+      return;
+    }
+
+    const isActiveRunService = currentRunService === sourceService;
+
+    switch (message.type) {
       case 'run_started':
+        if (!isActiveRunService) return;
         clearAlert();
         prepareTable(message.providers || []);
         awaitingRun = false;
         runInProgress = true;
-        hideConnectionStatus();
         break;
       case 'provider_result':
+        if (!isActiveRunService) return;
         if (message.consensus) {
           updateConsensusDisplay(message.consensus);
         }
@@ -231,154 +444,158 @@ function init() {
         }
         break;
       case 'run_complete':
+        if (!isActiveRunService) return;
         updateConsensusDisplay(message.consensus || {});
         runInProgress = false;
-        hideConnectionStatus();
+        if (currentRunService === sourceService) {
+          sourceService.close(1000, 'run complete');
+          if (currentRunService === sourceService) {
+            currentRunService = null;
+          }
+        }
         break;
       case 'error':
-        showAlert(message.message || 'An error occurred.');
+        if (!isActiveRunService) {
+          const shouldOfferRetry = Object.keys(providerLists || {}).length === 0;
+          if (shouldOfferRetry) {
+            showAlert(message.message || 'An error occurred.', 'is-danger', {
+              retry: true,
+              onRetry: bootstrapProviderLists,
+            });
+          } else {
+            showAlert(message.message || 'An error occurred.', 'is-danger');
+          }
+          if (sourceService) {
+            sourceService.close(1000, 'non-run error message');
+          }
+          return;
+        }
+        showAlert(message.message || 'An error occurred.', 'is-danger', { retry: true });
         runInProgress = false;
         awaitingRun = false;
+        if (currentRunService === sourceService) {
+          sourceService.close(1000, 'run error');
+          if (currentRunService === sourceService) {
+            currentRunService = null;
+          }
+        }
         break;
       default:
         console.warn('Unhandled message', message);
     }
   }
 
-  function handleRunConnectionFailure() {
-    if (!hasRequested || (!runInProgress && !awaitingRun)) return;
-    runInProgress = false;
-    awaitingRun = false;
-    showConnectionStatus('is-danger', 'Connection lost', { allowReconnect: true });
-    showAlert('Connection lost before all results were received.');
-  }
-
-  function detachWebSocketHandlers() {
-    if (!ws || !wsHandlers) return;
-    ws.removeEventListener('message', wsHandlers.message);
-    ws.removeEventListener('close', wsHandlers.close);
-    ws.removeEventListener('error', wsHandlers.error);
-    wsHandlers = null;
-  }
-
-  async function ensureConnection(options = {}) {
-    const { silent = false } = options;
-
-    if (ws && ws.readyState === WebSocket.OPEN) {
+  function handleRunConnectionFailure(sourceService) {
+    if (currentRunService !== sourceService) return;
+    if (!hasRequested || (!runInProgress && !awaitingRun)) {
+      sourceService.close(1000, 'run connection failure');
+      if (currentRunService === sourceService) {
+        currentRunService = null;
+      }
       return;
     }
-
-    if (ws && ws.readyState === WebSocket.CONNECTING && wsReadyPromise) {
-      return wsReadyPromise;
+    runInProgress = false;
+    awaitingRun = false;
+    showAlert('Connection lost before all results were received.', 'is-danger', { retry: true });
+    sourceService.close(1000, 'run connection failure');
+    if (currentRunService === sourceService) {
+      currentRunService = null;
     }
+  }
 
-    if (ws) {
-      detachWebSocketHandlers();
-      try {
-        ws.close();
-      } catch (err) {
-        // ignore
-      }
-    }
-
-    ws = new WebSocket(wsUrl);
-
-    wsReadyPromise = new Promise((resolve, reject) => {
-      let resolved = false;
-      let settled = false;
-
-      const finish = (success, value) => {
-        if (settled) return;
-        settled = true;
-        wsReadyPromise = null;
-        if (success) {
-          resolve(value);
-        } else {
-          reject(value);
-        }
-      };
-
-      const handleOpen = () => {
-        resolved = true;
+  function createRunService() {
+    const runService = new DnsCheckService({
+      url: wsUrl,
+      onOpen: () => {
         if (hasRequested) {
-          hideConnectionStatus();
+          clearAlert();
         }
-        clearAlert();
-        finish(true);
-      };
-
-      const handleMessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          handleServerMessage(payload);
-        } catch (err) {
-          showAlert('Received malformed message from server.');
-        }
-      };
-
-      const handleError = () => {
-        if (!resolved) {
-          detachWebSocketHandlers();
-          ws = null;
-          if (hasRequested) {
-            showConnectionStatus('is-danger', 'Connection failed', { allowReconnect: true });
-            showAlert('Unable to connect to the DNS checker service.');
+      },
+      onMessage: (message) => handleServerMessage(message, runService),
+      onError: ({ wasConnected }) => {
+        if (currentRunService !== runService) return;
+        if (!hasRequested) {
+          runService.close(1000, 'run aborted');
+          if (currentRunService === runService) {
+            currentRunService = null;
           }
-          finish(false, new Error('connection error'));
           return;
         }
-        handleRunConnectionFailure();
-      };
-
-      const handleClose = () => {
-        detachWebSocketHandlers();
-        ws = null;
-        if (!resolved) {
-          if (hasRequested) {
-            showConnectionStatus('is-danger', 'Connection failed', { allowReconnect: true });
-            showAlert('Connection closed before it was ready.');
+        if (wasConnected) {
+          handleRunConnectionFailure(runService);
+        } else {
+          runInProgress = false;
+          awaitingRun = false;
+          showAlert('Unable to connect to the DNS checker service.', 'is-danger', { retry: true });
+          runService.close(1000, 'run connection error');
+          if (currentRunService === runService) {
+            currentRunService = null;
           }
-          finish(false, new Error('connection closed'));
-          return;
         }
-        finish(true);
-        if (runInProgress || awaitingRun) {
-          handleRunConnectionFailure();
-        } else if (hasRequested) {
-          hideConnectionStatus();
+      },
+      onClose: ({ wasConnected }) => {
+        if (currentRunService !== runService) return;
+        if (wasConnected) {
+          handleRunConnectionFailure(runService);
         }
-      };
+      },
+      onMalformedMessage: () => {
+        showAlert('Received malformed message from server.');
+      },
+    });
+    return runService;
+  }
 
-      wsHandlers = {
-        message: handleMessage,
-        close: handleClose,
-        error: handleError,
-      };
-
-      ws.addEventListener('open', handleOpen, { once: true });
-      ws.addEventListener('message', handleMessage);
-      ws.addEventListener('close', handleClose);
-      ws.addEventListener('error', handleError);
+  async function bootstrapProviderLists() {
+    const listService = new DnsCheckService({
+      url: wsUrl,
+      onMessage: (message) => {
+        handleServerMessage(message, listService);
+        if (message.type === 'provider_lists') {
+          listService.close(1000, 'provider lists received');
+        }
+      },
+      onError: ({ wasConnected }) => {
+        if (wasConnected) {
+          showAlert('Connection lost while loading provider lists.', 'is-danger', {
+            retry: true,
+            onRetry: bootstrapProviderLists,
+          });
+        } else {
+          showAlert('Unable to load provider lists.', 'is-danger', {
+            retry: true,
+            onRetry: bootstrapProviderLists,
+          });
+        }
+        listService.close(1000, 'provider lists error');
+      },
+      onClose: ({ wasConnected }) => {
+        if (!wasConnected) {
+          showAlert('Unable to load provider lists.', 'is-danger', {
+            retry: true,
+            onRetry: bootstrapProviderLists,
+          });
+        }
+      },
+      onMalformedMessage: () => {
+        showAlert('Received malformed message from server.');
+      },
     });
 
-    return wsReadyPromise;
-  }
-
-  function sendMessage(message) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      throw new Error('Connection is not open.');
-    }
-    ws.send(JSON.stringify(message));
-  }
-
-  reconnectBtn.addEventListener('click', async () => {
-    hasRequested = true;
     try {
-      await ensureConnection();
+      await listService.ensureOpen();
+      try {
+        listService.send({ action: 'lists' });
+      } catch (err) {
+        // If sending fails, the error handlers above surface the problem.
+      }
     } catch (err) {
-      // ensureConnection already surfaced the error
+      showAlert('Unable to load provider lists.', 'is-danger', {
+        retry: true,
+        onRetry: bootstrapProviderLists,
+      });
     }
-  });
+  }
 
   providerSelect.addEventListener('change', updateProviderDescription);
 
@@ -396,29 +613,56 @@ function init() {
       domainInput.focus();
       return;
     }
+
     hasRequested = true;
     const listId = providerSelect.value;
-    try {
-      await ensureConnection();
-    } catch (err) {
-      return;
-    }
-    resetTable();
-    awaitingRun = true;
-    runInProgress = true;
     const transport = transportSelect.value;
+
+    const params = new URLSearchParams(window.location.search);
+    params.set('domain', domain);
+    if (listId) {
+      params.set('list_id', listId);
+    } else {
+      params.delete('list_id');
+    }
+    if (transport) {
+      params.set('transport', transport);
+    } else {
+      params.delete('transport');
+    }
+    const nextSearch = params.toString();
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    history.replaceState(null, '', nextUrl);
+
+    runInProgress = false;
+    awaitingRun = false;
+    if (currentRunService) {
+      currentRunService.close(1000, 'starting new run');
+      currentRunService = null;
+    }
+
+    const runService = createRunService();
+    currentRunService = runService;
+
     try {
-      sendMessage({ action: 'check', domain, list_id: listId, transport });
+      await runService.startCheck({ domain, list_id: listId, transport });
     } catch (err) {
       runInProgress = false;
       awaitingRun = false;
-      showAlert('Unable to send request: connection is not ready.');
+      showAlert('Unable to connect to the DNS checker service.', 'is-danger', { retry: true });
+      if (currentRunService === runService) {
+        runService.close(1000, 'start failed');
+        currentRunService = null;
+      }
+      return;
     }
+
+    resetTable();
+    awaitingRun = true;
+    runInProgress = true;
   });
 
-  ensureConnection({ silent: true }).catch(() => {
-    // Initial connection failure is surfaced when the user tries to run a check.
-  });
+  bootstrapProviderLists();
 }
 
 document.addEventListener('DOMContentLoaded', init);

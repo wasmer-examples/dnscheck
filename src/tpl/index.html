@@ -12,8 +12,6 @@
       .is-dimmed { color: #9ca3af; }
       .table td, .table th { vertical-align: top; }
       .status-tag { min-width: 7rem; justify-content: center; }
-      #connectionStatus { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-      #connectionStatus.is-hidden { display: none !important; }
     </style>
   </head>
   <body>
@@ -27,12 +25,12 @@
 	</p>
 
         <div class="box">
-          <form id="checkerForm">
+          <form id="checkerForm" method="get">
             <div class="columns is-variable is-4 is-multiline">
               <div class="column is-full-tablet is-half-desktop">
                 <label class="label" for="domainInput">Domain name</label>
                 <div class="control has-icons-left">
-                  <input id="domainInput" class="input" type="text" placeholder="example.com" autocomplete="off" required />
+                  <input id="domainInput" name="domain" class="input" type="text" placeholder="example.com" autocomplete="off" required />
                   <span class="icon is-small is-left">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                       <path d="M12 2c5.514 0 10 4.486 10 10s-4.486 10-10 10S2 17.514 2 12 6.486 2 12 2zm0 2c-.666 0-1.311.081-1.928.234.6.861 1.095 1.907 1.438 3.11H16.5A7.98 7.98 0 0 0 12 4zm-3.684.905A7.989 7.989 0 0 0 4 12c0 1.96.704 3.757 1.875 5.15.773-1.123 1.394-2.51 1.8-4.066H6.5a1 1 0 1 1 0-2h1.516c.193-.92.323-1.892.366-2.905H6.5a1 1 0 1 1 0-2h1.816c.104-.418.232-.81.372-1.174l.628-1.02zM12 20a7.98 7.98 0 0 0 4.5-1.344H13.51c-.343 1.203-.838 2.25-1.438 3.11.617.153 1.262.234 1.928.234zm5.625-2.85A7.99 7.99 0 0 0 20 12a7.99 7.99 0 0 0-1.625-5.15c-.773 1.123-1.394 2.51-1.8 4.066h1.213a1 1 0 1 1 0 2h-1.516c-.193.92-.323 1.892-.366 2.905h1.382a1 1 0 1 1 0 2h-1.816c-.104.418-.232.81-.372 1.174l-.628 1.02A7.989 7.989 0 0 0 18 18c-.001-.009-.001-.018-.001-.026z" />
@@ -43,14 +41,14 @@
               <div class="column is-full-tablet is-one-quarter-desktop">
                 <label class="label" for="providerList">Resolver list</label>
                 <div class="select is-fullwidth">
-                  <select id="providerList"></select>
+                  <select id="providerList" name="list_id"></select>
                 </div>
                 <p id="providerDescription" class="help is-dimmed mt-1"></p>
               </div>
               <div class="column is-full-tablet is-one-quarter-desktop">
                 <label class="label" for="transportSelect">Transport</label>
                 <div class="select is-fullwidth">
-                  <select id="transportSelect">
+                  <select id="transportSelect" name="transport">
 		    {{TRANSPORT_OPTIONS}}
                   </select>
                 </div>
@@ -66,14 +64,6 @@
               </p>
             </div>
           </form>
-        </div>
-
-        <div id="connectionStatus" class="notification is-light is-hidden">
-          <div>
-            <strong>Status:</strong>
-            <span id="statusTag" class="tag status-tag">—</span>
-          </div>
-          <button id="reconnect" class="button is-small" disabled>Reconnect</button>
         </div>
 
         <div id="alertArea"></div>
