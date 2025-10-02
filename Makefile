@@ -5,6 +5,12 @@ run-native:
 run-wasmer:
 	uvx shipit-cli --wasmer --start
 
+testcafe-native:
+	@tests/testcafe/run.sh
+
+testcafe-record:
+	@tests/testcafe/record.sh
+
 format:
 	uv format
 

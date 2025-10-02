@@ -12,6 +12,8 @@
       .is-dimmed { color: #9ca3af; }
       .table td, .table th { vertical-align: top; }
       .status-tag { min-width: 7rem; justify-content: center; }
+      #connectionStatus { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+      #connectionStatus.is-hidden { display: none !important; }
     </style>
   </head>
   <body>
@@ -68,7 +70,7 @@
           </form>
         </div>
 
-        <div id="connectionStatus" class="notification is-light is-hidden is-flex is-align-items-center is-justify-content-space-between">
+        <div id="connectionStatus" class="notification is-light is-hidden">
           <div>
             <strong>Status:</strong>
             <span id="statusTag" class="tag status-tag">—</span>

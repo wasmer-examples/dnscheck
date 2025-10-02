@@ -3,3 +3,5 @@ __pycache__
 wasix-site-packages
 .shipit
 Shipit
+.ruff_cache
+.pytest_cache

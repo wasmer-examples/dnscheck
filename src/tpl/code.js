@@ -90,6 +90,8 @@ function init() {
 
     row = document.createElement('tr');
     row.id = `row-${provider.id}`;
+    row.className = 'dns-result-row';
+    row.dataset.providerId = provider.id;
     row.innerHTML = `
       <td>
         <strong>${provider.name}</strong>
@@ -98,7 +100,7 @@ function init() {
       <td class="records" data-type="A"></td>
       <td class="records" data-type="AAAA"></td>
       <td class="latency is-dimmed">—</td>
-      <td class="status"><span class="tag">Waiting</span></td>
+      <td class="status"><span class="tag status-tag dns-result-status">Waiting</span></td>
     `;
     resultsBody.appendChild(row);
     return row;
@@ -142,7 +144,7 @@ function init() {
 
     const statusCell = row.querySelector('.status span');
     const { hasHardError, hasSoftError, hasRecords } = classListForStatus({ errors, records });
-    statusCell.className = 'tag status-tag';
+    statusCell.className = 'tag status-tag dns-result-status';
     if (hasHardError && !hasRecords) {
       statusCell.classList.add('is-danger');
       statusCell.textContent = 'Error';
@@ -267,9 +269,6 @@ function init() {
     }
 
     if (ws && ws.readyState === WebSocket.CONNECTING && wsReadyPromise) {
-      if (!silent) {
-        showConnectionStatus('is-warning', 'Connecting…');
-      }
       return wsReadyPromise;
     }
 

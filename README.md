@@ -32,6 +32,28 @@ src/
    ```
 3. Open http://localhost:8000 to use the UI, or visit http://localhost:8000/docs for the auto-generated API docs.
 
+## End-to-End Test
+
+1. Ensure the FastAPI app is running locally (for example with `uv run uvicorn src.main:app --reload`).
+2. Install the TestCafe dependency if you do not already have it available:
+   ```bash
+   npm install --save-dev testcafe
+   ```
+   You can also use `npx testcafe` without a local install.
+3. Run the browser test against the live app:
+   ```bash
+   npx testcafe chrome tests/testcafe/dnscheck.test.js
+   ```
+   Set `TESTCAFE_BASE_URL` if the app is served from a different origin (defaults to `http://localhost:8000`).
+   Or use the bundled helper which spins up the server automatically:
+   ```bash
+   make testcafe-native
+   ```
+   To iterate interactively or record new flows with TestCafe live mode (browser stays open for edits):
+   ```bash
+   make testcafe-record
+   ```
+
 ## API Overview
 
 ### WebSocket – `/api/ws`
@@ -61,4 +83,3 @@ Response body mirrors the `run_complete` WebSocket payload and includes consensu
 ## Deploying to Wasmer Edge
 
 Existing `make deploy-wasmer` and `make run-wasmer` targets remain available if you want to push to Wasmer Edge. See `Makefile` for details.
-
