@@ -51,9 +51,7 @@
                 <label class="label" for="transportSelect">Transport</label>
                 <div class="select is-fullwidth">
                   <select id="transportSelect">
-                    <option value="auto">Automatic</option>
-                    <option value="udp">UDP only</option>
-                    <option value="tcp">TCP only</option>
+		    {{TRANSPORT_OPTIONS}}
                   </select>
                 </div>
                 <p class="help is-dimmed mt-1">Automatic falls back to TCP when needed.</p>

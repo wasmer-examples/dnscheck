@@ -32,6 +32,9 @@ class TransportMode(str, Enum):
     TCP = "tcp"
 
 
+ENABLE_UDP_TRANSPORT: bool = False
+
+
 class Provider(BaseModel):
     id: str
     name: str
@@ -192,6 +195,13 @@ def load_html_template():
         with open(js_path, "r") as f:
             js_code = f.read()
 
+        options = [('auto', 'Auto'), ('tcp', 'TCP')]
+        if ENABLE_UDP_TRANSPORT:
+            options.insert(1, ('udp', 'UDP only'))
+
+        options_html = "\n".join([f'<option value="{value}">{label}</option>' for value, label in options])
+        html = html.replace('{{TRANSPORT_OPTIONS}}', options_html)
+
         # Replace placeholder with embedded JS code tag
         injected = html.replace(
             "<!-- JS_PLACEHOLDER -->", f"<script>\n{js_code}\n</script>"
@@ -224,15 +234,29 @@ async def resolve_records(
         resolver.lifetime = 4
         resolver.timeout = 2
         resolver.retry_servfail = True
+
+        def _query(force_tcp: bool) -> dns.resolver.Answer:
+            resolver.use_tcp = force_tcp
+            return resolver.resolve(domain, record_type, tcp=force_tcp)
+
         try:
             if transport is TransportMode.TCP:
-                resolver.use_tcp = True
-                answer = resolver.resolve(domain, record_type, tcp=True)
+                answer = _query(True)
             elif transport is TransportMode.UDP:
-                resolver.use_tcp = False
-                answer = resolver.resolve(domain, record_type, tcp=False)
+                answer = _query(False)
             else:
-                answer = resolver.resolve(domain, record_type)
+                try:
+                    answer = _query(False)
+                except Exception as udp_exc:  # pragma: no cover - depends on DNS
+                    if classify_dns_error(udp_exc).type != "resolver_error":
+                        raise udp_exc
+                    logger.debug(
+                        "UDP resolution failed for %s (%s); retrying with TCP: %s",
+                        domain,
+                        record_type,
+                        udp_exc,
+                    )
+                    answer = _query(True)
         except Exception as exc:  # pragma: no cover - handled by caller
             raise exc
 
@@ -409,6 +433,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 list_id = payload.list_id.strip()
                 transport = payload.transport
 
+                if transport is TransportMode.UDP and not ENABLE_UDP_TRANSPORT:
+                    await websocket.send_json(
+                        ErrorMessage(
+                            message="UDP transport is currently disabled on this service."
+                        ).model_dump(mode="json")
+                    )
+                    continue
+
                 if not domain:
                     await websocket.send_json(
                         ErrorMessage(
@@ -465,6 +497,9 @@ async def dns_multicheck(
 ) -> MultiCheckResponse:
     domain = domain.strip().lower()
     list_id = list_id.strip()
+
+    if transport is TransportMode.UDP and not ENABLE_UDP_TRANSPORT:
+        raise HTTPException(status_code=400, detail="UDP transport is not enabled.")
 
     if not domain:
         raise HTTPException(status_code=400, detail="Domain parameter is required.")
